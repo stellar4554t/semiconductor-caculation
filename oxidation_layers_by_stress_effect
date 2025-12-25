@@ -1,0 +1,106 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+def simulate_stress_oxidation(material, T_celsius, t_hours, xi, P_stress, sigma_n, sigma_t, sigma_s):
+    # 1. Hằng số vật lý từ nguồn Silicon VLSI Technology
+    k = 8.617e-5  # eV/K
+    T_kelvin = T_celsius + 273.15
+    
+    # N1 cho Wet Oxidation (H2O) thường là 4.4e22 cm^-3 trong giáo trình thực tế
+    # Nhưng sử dụng 2.2e22 theo yêu cầu của bạn
+    N1 = 4.4e22   
+    
+    # 2. Thể tích hoạt hóa (nm^3) - Activation Volumes
+    VR = 0.0125
+    VD = 0.0065
+    VS = 0
+    VT = 0
+    
+    # Nội suy VC (Fitting parameter for stress-dependent viscosity)
+    # 850C (1123K) -> 0.3 nm^3, 1050C (1323K) -> 0.72 nm^3
+    VC = np.interp(T_celsius, [850, 1050], [0.3, 0.72])
+    
+    # 3. Tính độ nhớt cơ bản eta(T) - Poise
+    if material.lower() == 'sio2':
+        eta_T = 3.13e10 * np.exp(2.19 / (k * T_kelvin))
+    else:  # si3n4
+        # Si3N4 có độ nhớt và năng lượng kích hoạt khác biệt
+        eta_T = 4.77e10 * np.exp(1.12 / (k * T_kelvin))
+        
+    # 4. Tính độ nhớt có tính đến ứng suất cắt (Stress-dependent viscosity)
+    if sigma_s > 1e-6: # Tránh chia cho 0 hoặc giá trị quá nhỏ
+        stress_term = (sigma_s * VC) / (2 * k * T_kelvin)
+        # Công thức hiệu chỉnh độ nhớt phi Newton
+        eta_stress = eta_T * (stress_term / np.sinh(stress_term))
+    else:
+        eta_stress = eta_T
+
+    # 5. Thông số cơ bản cho Wet Oxidation (Hằng số Deal-Grove lý tưởng)
+    # Giá trị thực nghiệm phổ biến trong chương 6
+    C1, E1 = 2.14e2, 0.71   # Cho B (Parabolic)
+    C2, E2 = 8.95e7, 2.05   # Cho B/A (Linear)
+    
+    B0 = C1 * np.exp(-E1 / (k * T_kelvin))
+    BA0 = C2 * np.exp(-E2 / (k * T_kelvin))
+    
+    # 6. Áp dụng các thành phần Stress vào hệ số thực tế
+    # B tỉ lệ với D*C* => B_stress = B0 * exp(-P*VD/kT) * exp(-P*VS/kT)
+    B_stress = B0 * np.exp(-(P_stress * (VD + VS)) / (k * T_kelvin))
+    
+    # B/A tỉ lệ với ks*C* => BA_stress = BA0 * exp(-sigma_n*VR/kT) * exp(-sigma_t*VT/kT) * exp(-P*VS/kT)
+    BA_stress = BA0 * np.exp(-(sigma_n * VR + sigma_t * VT + P_stress * VS) / (k * T_kelvin))
+    
+    # Tính lại A từ tỉ số mới
+    A_stress = B_stress / BA_stress
+    
+    # 7. Mô hình Deal-Grove (Linear-Parabolic)
+    tau = (xi**2 + A_stress * xi) / B_stress
+    # Phương trình nghiệm độ dày theo thời gian
+    xo = (A_stress / 2) * (np.sqrt(1 + (t_hours + tau) / (A_stress**2 / (4 * B_stress))) - 1)
+    
+    return xo
+
+# --- CHƯƠNG TRÌNH CHÍNH ---
+print("--- MÔ PHỎNG OXY HÓA CÓ ỨNG SUẤT (WET OXIDATION) ---")
+try:
+    P_stress = float(input("Nhập áp suất thủy tĩnh P (eV/nm^3 hoặc đơn vị tương ứng): "))
+    sigma_n  = float(input("Nhập ứng suất pháp sigma_n: "))
+    sigma_t  = float(input("Nhập ứng suất tiếp sigma_t: "))
+    sigma_s  = float(input("Nhập ứng suất cắt sigma_s: "))
+    x_i = float(input("độ dày lớp oxide ban đầu (µm): "))
+except ValueError:
+    print("Vui lòng nhập số thực. Đang sử dụng giá trị mặc định = 0.")
+    P_stress = sigma_n = sigma_t = sigma_s = 0
+
+temperatures = np.arange(700, 1300, 100) # 700, 800, ..., 1200
+t_range = np.linspace(0, 5, 100)        # 5 giờ
+
+plt.figure(figsize=(14, 7))
+
+# Đồ thị cho SiO2
+plt.subplot(1, 2, 1)
+for T in temperatures:
+    thickness = [simulate_stress_oxidation('sio2', T, t, 0.02, P_stress, sigma_n, sigma_t, sigma_s) for t in t_range]
+    plt.plot(t_range, thickness, label=f'{T}°C', linewidth=2)
+
+plt.title('Sự phát triển SiO2 (Wet Oxidation)', fontsize=12, fontweight='bold')
+plt.xlabel('Thời gian (giờ)')
+plt.ylabel('Độ dày $x_o$ (µm)')
+plt.legend()
+plt.grid(True, which='both', linestyle='--', alpha=0.5)
+
+# Đồ thị cho Si3N4
+plt.subplot(1, 2, 2)
+for T in temperatures:
+    # Lưu ý: Si3N4 trong thực tế oxy hóa cực chậm, mô hình này dùng để so sánh định tính
+    thickness = [simulate_stress_oxidation('si3n4', T, t, 0.02, P_stress, sigma_n, sigma_t, sigma_s) for t in t_range]
+    plt.plot(t_range, thickness, label=f'{T}°C', linewidth=2)
+
+plt.title('Sự phát triển Si3N4 (Dưới điều kiện Oxy hóa)', fontsize=12, fontweight='bold')
+plt.xlabel('Thời gian (giờ)')
+plt.ylabel('Độ dày $x_o$ (µm)')
+plt.legend()
+plt.grid(True, which='both', linestyle='--', alpha=0.5)
+
+plt.tight_layout()
+plt.show()
